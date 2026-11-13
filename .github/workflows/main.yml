@@ -1,58 +1,69 @@
-
-name: Build Android APK
+name: Build AI ML Coach APK
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
     steps:
-      - name: Checkout repository
+      - name: Checkout project
         uses: actions/checkout@v4
 
-      - name: Install Java 17
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      -       - name: Configure Android SDK
-        run: |
-          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
-          echo "Android SDK: $ANDROID_SDK_ROOT"
-          ls "$ANDROID_SDK_ROOT"
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
 
-      - name: Extract Android project
+      - name: Check Android SDK
+        shell: bash
         run: |
-          mkdir -p extracted
-          ZIP=$(find . -maxdepth 1 -name '*.zip' -print -quit)
-          if [ -z "$ZIP" ]; then
-            echo "No ZIP file found"
-            exit 1
-          fi
-          unzip -q "$ZIP" -d extracted
+          echo "ANDROID_HOME=${ANDROID_HOME:-unset}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-unset}"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          test -d "$SDK" || { echo "Android SDK missing"; exit 1; }
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "SDK location: $SDK"
+          ls "$SDK/platforms" || true
 
-      - name: Build APK
+      - name: Find and extract source ZIP if present
+        shell: bash
         run: |
-          PROJECT=$(find extracted -name settings.gradle -print -quit)
-          if [ -z "$PROJECT" ]; then
-            PROJECT=$(find extracted -name settings.gradle.kts -print -quit)
+          if [ -f settings.gradle ] || [ -f settings.gradle.kts ]; then
+            echo "Project already extracted in repository root"
+          else
+            ZIP=$(find . -maxdepth 1 -type f -iname '*.zip' -print -quit)
+            test -n "$ZIP" || { echo "No Gradle project or ZIP at repository root"; exit 1; }
+            mkdir -p extracted
+            unzip -q "$ZIP" -d extracted
+            PROJECT=$(find extracted -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)
+            test -n "$PROJECT" || { echo "No settings.gradle found in ZIP"; exit 1; }
+            echo "PROJECT_DIR=$(dirname "$PROJECT")" >> "$GITHUB_ENV"
           fi
-          if [ -z "$PROJECT" ]; then
-            echo "Android Gradle project not found"
-            exit 1
-          fi
-          cd "$(dirname "$PROJECT")"
-          gradle assembleDebug --no-daemon
 
-      - name: Upload APK
+      - name: Build debug APK
+        shell: bash
+        run: |
+          cd "${PROJECT_DIR:-.}"
+          gradle --version
+          gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Upload APK for phone installation
         uses: actions/upload-artifact@v4
         with:
-          name: AIML-Coach-APK
-          path: extracted/**/build/outputs/apk/debug/*.apk
+          name: AIML-Coach-Android-APK
+          path: '**/app/build/outputs/apk/debug/*.apk'
           if-no-files-found: error
-          
+          retention-days: 14
